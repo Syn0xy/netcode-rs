@@ -3,6 +3,8 @@ use std::{
     net::{SocketAddr, ToSocketAddrs, UdpSocket},
 };
 
+use log::debug;
+
 use crate::constants;
 
 pub struct UdpTransport {
@@ -15,6 +17,8 @@ impl UdpTransport {
         let socket = UdpSocket::bind(addr)?;
 
         socket.set_nonblocking(true)?;
+
+        debug!("UDP transport bound to {:?}", socket.peer_addr());
 
         Ok(Self {
             socket,

@@ -5,6 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use log::{debug, info, trace, warn};
 
 use crate::{
     client::{ClientEvent, ClientState},
@@ -20,10 +21,13 @@ pub struct ClientPeer {
 
 impl ClientPeer {
     pub fn new<A: ToSocketAddrs, B: ToSocketAddrs>(addr: A, server_addr: B) -> io::Result<Self> {
+        let server = Peer::resolve(server_addr)?;
+        debug!("ClientPeer created, server={}", server.addr());
+
         Ok(Self {
             state: ClientState::Disconnected,
             transport: UdpTransport::new(addr)?,
-            server: Peer::resolve(server_addr)?,
+            server,
         })
     }
 
@@ -77,6 +81,7 @@ impl ClientPeer {
     }
 
     fn send_request(&mut self) -> io::Result<()> {
+        info!("Sending connection request to {}", self.server.addr());
         self.send_empty(PacketKind::Request)
     }
 
@@ -87,20 +92,23 @@ impl ClientPeer {
 
         match (&self.state, &packet.kind) {
             (ClientState::Connecting, PacketKind::Accept) => {
+                info!("Connected to server {}", self.server.addr());
                 self.state = ClientState::Connected;
-                Ok(Some(ClientEvent::Connected))
+                return Ok(Some(ClientEvent::Connected));
             }
             (ClientState::Connected, PacketKind::Disconnect) => {
+                info!("Disconnected by server {}", self.server.addr());
                 self.state = ClientState::Disconnected;
-                Ok(Some(ClientEvent::Disconnected))
+                return Ok(Some(ClientEvent::Disconnected));
             }
             (_, PacketKind::Ping) => {
-                println!("[ CLIENT ] Send pong");
+                trace!("Received ping, sending pong");
                 self.send_empty(PacketKind::Pong)?;
-                Ok(None)
             }
-            _ => Ok(Some(ClientEvent::Data(packet))),
+            _ => {}
         }
+
+        Ok(Some(ClientEvent::Data(packet)))
     }
 
     pub fn connect(&mut self, timeout: Duration, interval: Duration) -> io::Result<()> {
@@ -110,6 +118,13 @@ impl ClientPeer {
                 "Connection already exists",
             ));
         }
+
+        info!(
+            "Connecting to {} (timeout={:?}, retry={:?})",
+            self.server.addr(),
+            timeout,
+            interval
+        );
 
         self.state = ClientState::Connecting;
 
@@ -121,6 +136,7 @@ impl ClientPeer {
             let now = Instant::now();
 
             if now >= deadline {
+                warn!("Connection to {} timed out", self.server.addr());
                 self.state = ClientState::Disconnected;
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -129,7 +145,6 @@ impl ClientPeer {
             }
 
             if now >= next_retry {
-                println!("[ CLIENT ] > Request");
                 self.send_request()?;
                 next_retry += interval;
             }

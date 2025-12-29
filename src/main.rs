@@ -5,7 +5,7 @@ use netcode::{
     server::ServerPeer,
 };
 
-const SERVER_ADDR: &str = "127.0.0.1:5000";
+const SERVER_ADDR: &str = "127.0.0.10:5000";
 const CLIENT_BIND: &str = "0.0.0.0:0";
 
 fn main() {

@@ -5,6 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use log::{debug, info, trace};
 
 use crate::{
     packet::{Packet, PacketKind},
@@ -21,8 +22,11 @@ pub struct ServerPeer {
 
 impl ServerPeer {
     pub fn new<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+        let transport = UdpTransport::new(addr)?;
+        debug!("ServerPeer started");
+
         Ok(Self {
-            transport: UdpTransport::new(addr)?,
+            transport,
             clients_by_addr: Default::default(),
             clients_by_id: Default::default(),
             client_id_sequence: PeerId(0),
@@ -38,10 +42,13 @@ impl ServerPeer {
     fn get_peer_id(&self, addr: SocketAddr) -> io::Result<PeerId> {
         match self.clients_by_addr.get(&addr) {
             Some(id) => Ok(*id),
-            None => Err(io::Error::new(
-                io::ErrorKind::NetworkUnreachable,
-                "Client introuvable",
-            )),
+            None => {
+                trace!("Packet from unknown client {}", addr);
+                Err(io::Error::new(
+                    io::ErrorKind::NetworkUnreachable,
+                    "Client introuvable",
+                ))
+            }
         }
     }
 
@@ -54,6 +61,8 @@ impl ServerPeer {
             let id = self.next_id();
             self.clients_by_addr.insert(addr, id);
             self.clients_by_id.insert(id, Peer::new(addr));
+
+            info!("Client {} connected from {}", id.0, addr);
             Some(id)
         } else {
             None
@@ -112,7 +121,6 @@ impl ServerPeer {
         match &packet.kind {
             PacketKind::Request => {
                 if let Some(id) = self.register_client(addr) {
-                    println!("[ SERVER ] > Accept to {:?}", id);
                     self.send_accept_to(id)?;
                     Ok(Some(ServerEvent::NewClient(id)))
                 } else {
@@ -121,7 +129,8 @@ impl ServerPeer {
             }
             PacketKind::Disconnect => {
                 if let Some(id) = self.clients_by_addr.remove(&addr) {
-                    println!("[ SERVER ] > Disconnect to {:?}", id);
+                    info!("Client {} disconnected", id.0);
+
                     self.send_empty_to(id, PacketKind::Disconnect)?;
                     self.clients_by_id.remove(&id);
                     Ok(Some(ServerEvent::DisconnectClient(id)))
@@ -131,7 +140,8 @@ impl ServerPeer {
             }
             PacketKind::Ping => {
                 let id = self.get_peer_id(addr)?;
-                println!("[ SERVER ] > Pong to {:?}", id);
+                trace!("Ping from client {}", id.0);
+
                 self.send_empty_to(id, PacketKind::Pong)?;
                 Ok(Some(ServerEvent::Data(id, packet)))
             }

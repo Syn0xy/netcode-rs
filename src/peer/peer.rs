@@ -4,6 +4,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use log::{debug, warn};
 
 use crate::packet::{Packet, PacketKind};
 
@@ -14,6 +15,8 @@ pub struct Peer {
 
 impl Peer {
     pub fn new(addr: SocketAddr) -> Self {
+        debug!("New peer created: {}", addr);
+
         Self {
             addr,
             next_sequence: 0,
@@ -22,11 +25,17 @@ impl Peer {
 
     pub fn resolve<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
         match addr.to_socket_addrs()?.next() {
-            Some(socket_addr) => Ok(Self::new(socket_addr)),
-            None => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Invalid server address",
-            )),
+            Some(socket_addr) => {
+                debug!("Resolved peer address to {}", socket_addr);
+                Ok(Self::new(socket_addr))
+            }
+            None => {
+                warn!("Failed to resolve peer address");
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Invalid server address",
+                ))
+            }
         }
     }
 

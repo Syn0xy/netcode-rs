@@ -1,8 +1,8 @@
-use crate::{packet::Packet, server::PeerId};
+use crate::peer::PeerId;
 
 #[derive(Debug)]
-pub enum ServerEvent {
-    NewClient(PeerId),
-    DisconnectClient(PeerId),
-    Data(PeerId, Packet),
+pub enum ServerEvent<T> {
+    NewConnection(PeerId),
+    Disconnection(PeerId),
+    Data(PeerId, T),
 }

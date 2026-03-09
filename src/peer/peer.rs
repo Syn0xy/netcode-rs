@@ -3,57 +3,23 @@ use std::{
     net::{SocketAddr, ToSocketAddrs},
 };
 
-use bytes::Bytes;
-use log::{debug, warn};
-
-use crate::packet::{Packet, PacketKind};
-
-pub struct Peer {
+pub(crate) struct Peer {
     addr: SocketAddr,
-    next_sequence: u16,
 }
 
 impl Peer {
-    pub fn new(addr: SocketAddr) -> Self {
-        debug!("New peer created: {}", addr);
-
-        Self {
-            addr,
-            next_sequence: 0,
-        }
-    }
-
-    pub fn resolve<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        match addr.to_socket_addrs()?.next() {
-            Some(socket_addr) => {
-                debug!("Resolved peer address to {}", socket_addr);
-                Ok(Self::new(socket_addr))
-            }
-            None => {
-                warn!("Failed to resolve peer address");
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Invalid server address",
-                ))
-            }
-        }
+    pub const fn new(addr: SocketAddr) -> Self {
+        Self { addr }
     }
 
     pub const fn addr(&self) -> SocketAddr {
         self.addr
     }
 
-    const fn next_sequence(&mut self) -> u16 {
-        let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.wrapping_add(1);
-        sequence
-    }
-
-    pub const fn make_packet(&mut self, kind: PacketKind, payload: Bytes) -> Packet {
-        Packet {
-            kind,
-            sequence: self.next_sequence(),
-            payload,
-        }
+    pub fn resolve<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
+        addr.to_socket_addrs()?
+            .next()
+            .map(|addr| Self { addr })
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid address"))
     }
 }

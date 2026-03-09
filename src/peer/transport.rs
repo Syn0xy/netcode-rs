@@ -3,26 +3,20 @@ use std::{
     net::{SocketAddr, ToSocketAddrs, UdpSocket},
 };
 
-use log::debug;
-
-use crate::constants;
-
-pub struct UdpTransport {
+pub struct UdpTransport<const BUFFER_SIZE: usize> {
     socket: UdpSocket,
-    buffer: [u8; constants::MAX_PACKET_SIZE],
+    buffer: [u8; BUFFER_SIZE],
 }
 
-impl UdpTransport {
+impl<const BUFFER_SIZE: usize> UdpTransport<BUFFER_SIZE> {
     pub fn new<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let socket = UdpSocket::bind(addr)?;
-
-        socket.set_nonblocking(true)?;
-
-        debug!("UDP transport bound to {:?}", socket.peer_addr());
-
         Ok(Self {
-            socket,
-            buffer: [0; constants::MAX_PACKET_SIZE],
+            socket: {
+                let socket = UdpSocket::bind(addr)?;
+                socket.set_nonblocking(true)?;
+                socket
+            },
+            buffer: [0; BUFFER_SIZE],
         })
     }
 
@@ -31,7 +25,7 @@ impl UdpTransport {
         Ok((addr, &self.buffer[..len]))
     }
 
-    pub fn send<D: AsRef<[u8]>>(&self, addr: SocketAddr, data: D) -> io::Result<()> {
+    pub fn send(&self, addr: SocketAddr, data: impl AsRef<[u8]>) -> io::Result<()> {
         self.socket.send_to(data.as_ref(), addr)?;
         Ok(())
     }

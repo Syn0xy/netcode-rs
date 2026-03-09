@@ -1,154 +1,117 @@
 use std::{
     collections::HashMap,
     io,
+    marker::PhantomData,
     net::{SocketAddr, ToSocketAddrs},
 };
 
-use bytes::Bytes;
-use log::{debug, info, trace};
-
 use crate::{
-    packet::{Packet, PacketKind},
-    peer::{Peer, UdpTransport},
-    server::{PeerId, ServerEvent},
+    constants::DEFAULT_SERVER_BUFFER_SIZE,
+    peer::{Packet, Peer, PeerId, UdpTransport},
+    server::ServerEvent,
 };
 
-pub struct ServerPeer {
-    transport: UdpTransport,
+pub struct ServerPeer<T, const BUFFER_SIZE: usize = DEFAULT_SERVER_BUFFER_SIZE> {
+    transport: UdpTransport<BUFFER_SIZE>,
+    client_id_sequence: PeerId,
     clients_by_addr: HashMap<SocketAddr, PeerId>,
     clients_by_id: HashMap<PeerId, Peer>,
-    client_id_sequence: PeerId,
+    phantom: PhantomData<T>,
 }
 
-impl ServerPeer {
+impl<T, const BUFFER_SIZE: usize> ServerPeer<T, BUFFER_SIZE> {
     pub fn new<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let transport = UdpTransport::new(addr)?;
-        debug!("ServerPeer started");
-
         Ok(Self {
-            transport,
+            transport: UdpTransport::new(addr)?,
+            client_id_sequence: Default::default(),
             clients_by_addr: Default::default(),
             clients_by_id: Default::default(),
-            client_id_sequence: PeerId(0),
+            phantom: Default::default(),
         })
     }
 
-    const fn next_id(&mut self) -> PeerId {
-        let id = self.client_id_sequence;
-        self.client_id_sequence = self.client_id_sequence.next();
-        id
+    fn next_client_id(&mut self) -> Option<PeerId> {
+        self.client_id_sequence.next()
     }
+}
 
-    fn get_peer_id(&self, addr: SocketAddr) -> io::Result<PeerId> {
-        match self.clients_by_addr.get(&addr) {
-            Some(id) => Ok(*id),
-            None => {
-                trace!("Packet from unknown client {}", addr);
-                Err(io::Error::new(
-                    io::ErrorKind::NetworkUnreachable,
-                    "Client introuvable",
-                ))
-            }
-        }
-    }
-
-    fn get_peer_mut(&mut self, id: &PeerId) -> Option<&mut Peer> {
-        self.clients_by_id.get_mut(id)
-    }
-
-    fn register_client(&mut self, addr: SocketAddr) -> Option<PeerId> {
-        if !self.clients_by_addr.contains_key(&addr) {
-            let id = self.next_id();
-            self.clients_by_addr.insert(addr, id);
-            self.clients_by_id.insert(id, Peer::new(addr));
-
-            info!("Client {} connected from {}", id.0, addr);
-            Some(id)
-        } else {
-            None
-        }
-    }
-
-    fn recv(&mut self) -> io::Result<Option<(SocketAddr, Packet)>> {
-        let Ok((addr, data)) = self.transport.recv() else {
-            return Ok(None);
-        };
-
-        match Packet::decode(&data) {
-            Ok(packet) => Ok(Some((addr, packet))),
+impl<T: serde::Serialize, const BUFFER_SIZE: usize> ServerPeer<T, BUFFER_SIZE> {
+    fn dispatch(&self, addr: SocketAddr, packet: Packet<T>) -> io::Result<()> {
+        match postcard::to_allocvec(&packet) {
+            Ok(data) => self.transport.send(addr, data),
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
     }
 
-    pub fn send(&mut self, kind: PacketKind, payload: Bytes) -> io::Result<()> {
-        for peer in self.clients_by_id.values_mut() {
-            let packet = peer.make_packet(kind, payload.clone());
-            self.transport.send(peer.addr(), &packet.encode())?;
-        }
-
-        Ok(())
-    }
-
-    pub fn send_empty(&mut self, packet_kind: PacketKind) -> io::Result<()> {
-        self.send(packet_kind, Bytes::new())
-    }
-
-    pub fn send_to(&mut self, id: PeerId, kind: PacketKind, payload: Bytes) -> io::Result<()> {
-        match self.get_peer_mut(&id) {
-            Some(peer) => {
-                let packet = peer.make_packet(kind, payload);
-                let addr = peer.addr();
-
-                self.transport.send(addr, &packet.encode())
-            }
+    pub fn send_to(&self, id: &PeerId, message: T) -> io::Result<()> {
+        match self.clients_by_id.get(id) {
+            Some(peer) => self.dispatch(peer.addr(), Packet::Data(message)),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "Unknow peer")),
         }
     }
 
-    pub fn send_empty_to(&mut self, id: PeerId, kind: PacketKind) -> io::Result<()> {
-        self.send_to(id, kind, Bytes::new())
-    }
+    pub fn broadcast(&self, message: T) -> io::Result<()> {
+        let packet = Packet::Data(message);
 
-    fn send_accept_to(&mut self, id: PeerId) -> io::Result<()> {
-        self.send_empty_to(id, PacketKind::Accept)
+        match postcard::to_allocvec(&packet) {
+            Ok(data) => {
+                for peer in self.clients_by_id.values() {
+                    self.transport.send(peer.addr(), &data)?;
+                }
+                Ok(())
+            }
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
     }
+}
 
-    pub fn poll(&mut self) -> io::Result<Option<ServerEvent>> {
+impl<T: serde::de::DeserializeOwned, const BUFFER_SIZE: usize> ServerPeer<T, BUFFER_SIZE> {
+    fn recv(&mut self) -> io::Result<Option<(SocketAddr, Packet<T>)>> {
+        let Ok((addr, data)) = self.transport.recv() else {
+            return Ok(None);
+        };
+
+        match postcard::from_bytes(data) {
+            Ok(packet) => Ok(Some((addr, packet))),
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
+    }
+}
+
+impl<T: serde::Serialize + serde::de::DeserializeOwned, const BUFFER_SIZE: usize>
+    ServerPeer<T, BUFFER_SIZE>
+{
+    pub fn poll(&mut self) -> io::Result<Option<ServerEvent<T>>> {
         let Some((addr, packet)) = self.recv()? else {
             return Ok(None);
         };
 
-        match &packet.kind {
-            PacketKind::Request => {
-                if let Some(id) = self.register_client(addr) {
-                    self.send_accept_to(id)?;
-                    Ok(Some(ServerEvent::NewClient(id)))
-                } else {
-                    Ok(None)
-                }
+        if let Packet::Request = packet {
+            if self.clients_by_addr.contains_key(&addr) {
+                return Ok(None);
             }
-            PacketKind::Disconnect => {
-                if let Some(id) = self.clients_by_addr.remove(&addr) {
-                    info!("Client {} disconnected", id.0);
 
-                    self.send_empty_to(id, PacketKind::Disconnect)?;
-                    self.clients_by_id.remove(&id);
-                    Ok(Some(ServerEvent::DisconnectClient(id)))
-                } else {
-                    Ok(None)
-                }
-            }
-            PacketKind::Ping => {
-                let id = self.get_peer_id(addr)?;
-                trace!("Ping from client {}", id.0);
+            self.dispatch(addr, Packet::Accept)?;
 
-                self.send_empty_to(id, PacketKind::Pong)?;
-                Ok(Some(ServerEvent::Data(id, packet)))
-            }
-            _ => {
-                let id = self.get_peer_id(addr)?;
-                Ok(Some(ServerEvent::Data(id, packet)))
-            }
+            let Some(peer_id) = self.next_client_id() else {
+                return Ok(None);
+            };
+
+            self.clients_by_addr.insert(addr, peer_id);
+            self.clients_by_id.insert(peer_id, Peer::new(addr));
+
+            return Ok(None);
         }
+
+        let Some(&peer_id) = self.clients_by_addr.get(&addr) else {
+            return Ok(None);
+        };
+
+        Ok(match packet {
+            Packet::Confirm => Some(ServerEvent::NewConnection(peer_id)),
+            Packet::Disconnect => Some(ServerEvent::Disconnection(peer_id)),
+            Packet::Data(data) => Some(ServerEvent::Data(peer_id, data)),
+            _ => None,
+        })
     }
 }

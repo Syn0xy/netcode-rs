@@ -1,2 +1,2 @@
-pub const MAX_PACKET_SIZE: usize = 1024;
-pub(crate) const PROTOCOL_HEADER_SIZE: usize = size_of::<u8>() + size_of::<u16>();
+pub const DEFAULT_SERVER_BUFFER_SIZE: usize = 1400;
+pub const DEFAULT_CLIENT_BUFFER_SIZE: usize = 1400;

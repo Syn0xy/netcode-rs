@@ -109,7 +109,11 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned, const BUFFER_SIZE: usize
 
         Ok(match packet {
             Packet::Confirm => Some(ServerEvent::NewConnection(peer_id)),
-            Packet::Disconnect => Some(ServerEvent::Disconnection(peer_id)),
+            Packet::Disconnect => {
+                self.clients_by_addr.remove(&addr);
+                self.clients_by_id.remove(&peer_id);
+                Some(ServerEvent::Disconnection(peer_id))
+            }
             Packet::Data(data) => Some(ServerEvent::Data(peer_id, data)),
             _ => None,
         })

@@ -1,6 +1,6 @@
 use std::{io, thread, time::Duration};
 
-use netcode_serde_rs::{
+use netcode::{
     client::{ClientEvent, ClientPeer},
     server::{ServerEvent, ServerPeer},
 };
@@ -17,7 +17,10 @@ enum Message {
 fn main() {
     thread::scope(|s| {
         s.spawn(|| log_error("[ SERVER ]", server));
-        s.spawn(|| log_error("[ CLIENT ]", client));
+
+        for _ in 0..4 {
+            s.spawn(|| log_error("[ CLIENT ]", client));
+        }
     });
 }
 

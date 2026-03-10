@@ -42,6 +42,10 @@ impl<T: serde::Serialize, const BUFFER_SIZE: usize> ClientPeer<T, BUFFER_SIZE> {
     pub fn send(&self, message: T) -> io::Result<()> {
         self.dispatch(Packet::Data(message))
     }
+
+    pub fn disconnect(&self) -> io::Result<()> {
+        self.dispatch(Packet::Disconnect)
+    }
 }
 
 impl<T: serde::de::DeserializeOwned, const BUFFER_SIZE: usize> ClientPeer<T, BUFFER_SIZE> {
